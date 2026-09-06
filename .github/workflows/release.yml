@@ -110,10 +110,16 @@ jobs:
       run:
         # bash (git-bash) keeps the steps byte-identical to the linux job's.
         shell: bash
+    env:
+      # The window's CEF distribution, as in the linux job.
+      CEF_PATH: ${{ github.workspace }}/.cef
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      # The window's toolchain and caches; see the linux job.
+      - uses: ./.github/actions/shell-toolchain
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -152,12 +158,58 @@ jobs:
       - name: Backend tests (windows)
         run: bash .github/scripts/go-test-summary.sh windows
 
+      # End to end on the runner before the assets ship: the installer installs
+      # silently, lich.exe finds the window beside itself and opens it, the page
+      # it serves loads (read over CDP: alive alone is not proof, a crash keeps
+      # a process around while its dump is written), the window closes on a
+      # plain close request, which is what the restart flow sends, and lich
+      # exits with it. Its config lives under an APPDATA of its own.
+      - name: Install and run lich end to end
+        env:
+          MSYS_NO_PATHCONV: "1"
+        run: |
+          bin/lich-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG="$RUNNER_TEMP/setup.log"
+          app="$LOCALAPPDATA/Programs/lich"
+          test -f "$app/lich.exe" && test -f "$app/shell/lich-shell.exe" && test -f "$app/shell/libcef.dll"
+          # The C runtime is static: a machine without the Visual C++
+          # redistributable must open the window too.
+          dumpbin /DEPENDENTS "$app/shell/lich-shell.exe" > "$RUNNER_TEMP/deps.txt"
+          if grep -qi 'VCRUNTIME\|MSVCP' "$RUNNER_TEMP/deps.txt"; then
+            echo "::error::lich-shell.exe depends on the Visual C++ runtime"; cat "$RUNNER_TEMP/deps.txt"; exit 1
+          fi
+          export APPDATA="$RUNNER_TEMP/appdata" LICH_LISTEN_PORT=47899
+          mkdir -p "$APPDATA"
+          "$app/lich.exe" -- --remote-debugging-port=9334 &
+          for _ in $(seq 1 30); do
+            sleep 1
+            token=$(jq -r .token "$APPDATA/lich/runtime.json" 2>/dev/null) && break
+          done
+          test -n "$token" || { echo "::error::lich never wrote runtime.json"; cat "$APPDATA/lich/lich.log"; exit 1; }
+          grep -q 'the bundled window' "$APPDATA/lich/lich.log" || { echo "::error::lich did not resolve its own window"; cat "$APPDATA/lich/lich.log"; exit 1; }
+          for _ in $(seq 1 30); do
+            sleep 1
+            curl -sf http://127.0.0.1:9334/json > "$RUNNER_TEMP/pages.json" 2>/dev/null && grep -q '"title": *"lich"' "$RUNNER_TEMP/pages.json" && break
+          done
+          grep -q '"title": *"lich"' "$RUNNER_TEMP/pages.json" || { echo "::error::the window never loaded lich's page"; cat "$APPDATA/lich/lich.log"; exit 1; }
+          sleep 10
+          tasklist | grep -q lich-shell.exe || { echo "::error::the window died"; cat "$APPDATA/lich/lich.log"; exit 1; }
+          # A close request, not a kill: the same WM_CLOSE the restart flow posts.
+          taskkill /IM lich-shell.exe > /dev/null
+          for _ in $(seq 1 15); do sleep 1; tasklist | grep -q '^lich.exe' || break; done
+          if tasklist | grep -q '^lich.exe'; then
+            echo "::error::lich.exe is still running after its window closed"; cat "$APPDATA/lich/lich.log"; exit 1
+          fi
+          grep -q 'window closed, exiting' "$APPDATA/lich/lich.log" || { echo "::error::lich did not log the window closing"; cat "$APPDATA/lich/lich.log"; exit 1; }
+          cat "$RUNNER_TEMP/pages.json"
+
       - name: Assemble Windows assets
         run: |
           cd bin
           tag="${GITHUB_REF_NAME//\//-}"
           mv lich.exe       "lich-${tag}-windows-amd64.exe"
           mv lich-setup.exe "lich-${tag}-windows-amd64-setup.exe"
+          # The window for the portable exe: unzipped beside it as shell\.
+          7z a -bso0 -bsp0 "lich-${tag}-windows-amd64-shell.zip" shell
           ls -la lich-${tag}-*
 
       - name: Upload Windows assets

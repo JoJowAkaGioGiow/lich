@@ -9,6 +9,18 @@ use kurogane::App;
 /// The title the window carries. The page title is never used for it.
 const TITLE: &str = "lich";
 
+/// The icon the window carries: title bar, taskbar button and app switcher
+/// on Windows, _NET_WM_ICON under X11 (Wayland draws the desktop entry's
+/// instead). A 256 px copy of build/appicon.png (build/appicon.py renders
+/// both): X11 stores the icon as raw pixels on the window, 8 MB at 1024,
+/// 256 KB at this size.
+const ICON: &[u8] = include_bytes!("../../build/appicon-256.png");
+
+/// What the window's AppUserModelID starts with; the class follows. The Start
+/// Menu shortcut in build/windows/lich.iss spells the same id out.
+#[cfg(windows)]
+const AUMID_PREFIX: &str = "omartelo.";
+
 #[derive(Debug, Default, PartialEq)]
 struct Launch {
     url: Option<String>,
@@ -63,13 +75,25 @@ fn main() {
     // CEF re-executes this binary for the renderer, GPU and utility roles with
     // an argv of its own. Those roles exit inside run_or_exit before any window
     // exists, so a missing --app= is a subprocess, not an error.
+    // kurogane takes the runtime from CEF_PATH before the one beside the
+    // executable, a developer's override that a CEF developer's shell would
+    // carry into lich (the CI runner's did: "invalid CEF runtime at .cef").
+    // The window lich ships is the only runtime it runs on.
+    // SAFETY: no other thread exists yet, so nothing reads the environment
+    // concurrently.
+    unsafe { std::env::remove_var("CEF_PATH") };
     let launch = parse(std::env::args().skip(1));
+    #[cfg(windows)]
+    if let Some(class) = &launch.class {
+        claim_taskbar_identity(class);
+    }
     let mut app = App::url(launch.url.unwrap_or_else(|| "about:blank".into()))
         // Only reached without --user-data-dir, which lich always passes: a
         // shell launched by hand gets a profile under its own name rather than
         // kurogane's default.
         .profile_id("lich")
         .window_title(TITLE)
+        .window_icon(ICON)
         // CEF's Chrome runtime loads the extensions a distribution installs
         // system-wide (plasma-browser-integration on KDE). A window that is
         // not a browser has no use for them.
@@ -98,6 +122,21 @@ fn main() {
         };
     }
     app.run_or_exit();
+}
+
+/// The AppUserModelID is Windows's WM_CLASS: the taskbar groups a process's
+/// windows under it and draws the icon of the Start Menu shortcut carrying the
+/// same id (lich.iss declares AUMID_PREFIX + "lich"), so the running window
+/// and the pinned one are one button. The dev shell's own class keeps it off
+/// the daily driver's. Only the browser process has a class on its argv, and
+/// only it is called here; CEF's subprocesses never own a window. Best
+/// effort: without it the button stands alone under the executable's icon.
+#[cfg(windows)]
+fn claim_taskbar_identity(class: &str) {
+    use windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
+    let id: Vec<u16> = format!("{AUMID_PREFIX}{class}\0").encode_utf16().collect();
+    // SAFETY: id is NUL-terminated and outlives the call, which copies it.
+    let _ = unsafe { SetCurrentProcessExplicitAppUserModelID(id.as_ptr()) };
 }
 
 #[cfg(test)]

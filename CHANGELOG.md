@@ -7,7 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **On Windows, lich now brings its own window too.** The installer ships the
+  same embedded Chromium (CEF) the Linux packages do, beside `lich.exe` as
+  `shell\`, and lich opens in it instead of looking for Chrome, Edge, Brave or
+  Vivaldi; the window carries lich's icon in its title bar and on the taskbar,
+  and groups under the Start Menu shortcut, pinned or not. If the window fails
+  on your machine, lich falls back to a Chromium-family browser and says so.
+  The portable exe gets the window from `lich-*-windows-amd64-shell.zip`
+  unzipped beside it. An installed lich now updates by running the next
+  installer rather than through the update button, which opens the release
+  page instead. macOS keeps opening the system browser for now.
+
 ### Changed
+
+- **The app icon sits on a dark plate.** The launcher, dock, taskbar and Start
+  Menu icon was the bare white mark on a transparent background, invisible on
+  a light taskbar or launcher, and no desktop swaps an app icon with its
+  theme. It is now the mark on a rounded dark plate, readable on either. The
+  favicon inside the window keeps following the color scheme as before.
 
 - **Dragging a file over a session now says where it will land.** The pane
   under the cursor fills and reads "Attach to <session>", with the line under
