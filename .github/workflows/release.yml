@@ -220,10 +220,15 @@ jobs:
 
   mac:
     runs-on: macos-latest
+    env:
+      CEF_PATH: ${{ github.workspace }}/.cef
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      # The window's toolchain and caches; see the linux job.
+      - uses: ./.github/actions/shell-toolchain
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -265,20 +270,39 @@ jobs:
       - name: Build macOS binaries
         run: task build:mac
 
+      # The window, for the runner's own architecture: Apple Silicon. The
+      # Intel bundle ships without one and opens a system browser.
+      - name: Build the window (arm64)
+        run: task build:shell
+
       # Two assets per arch: the .app the cask installs, and the bare binary the
       # in-app self-update and hand installs still download.
       - name: Assemble macOS assets
         run: |
           cd bin
           tag="${GITHUB_REF_NAME//\//-}"
+          ../build/darwin/bundle.sh lich-darwin-arm64 "${tag#v}" stage-arm64 shell
+          ../build/darwin/bundle.sh lich-darwin-amd64 "${tag#v}" stage-amd64
           for arch in arm64 amd64; do
-            ../build/darwin/bundle.sh "lich-darwin-${arch}" "${tag#v}" "stage-${arch}"
             # ditto, not zip: it is the archiver that keeps a bundle's symlinks,
             # permissions and signature intact for Homebrew Cask to unpack.
             ditto -c -k --keepParent "stage-${arch}/Lich.app" "lich-${tag}-darwin-${arch}.zip"
             mv "lich-darwin-${arch}" "lich-${tag}-darwin-${arch}"
           done
           ls -la lich-${tag}-*
+
+      # End to end on the runner before the assets ship; the script says what
+      # it proves.
+      - name: Run Lich.app end to end
+        run: bash .github/scripts/mac-e2e.sh bin/stage-arm64/Lich.app
+
+      - name: Upload end-to-end diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lich-macos-e2e
+          path: ${{ runner.temp }}/diag
+          if-no-files-found: ignore
 
       - name: Upload macOS assets
         uses: actions/upload-artifact@v7

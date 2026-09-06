@@ -7,10 +7,13 @@ description = "lich's window: an embedded Chromium (CEF) launched by the Go back
 license = "AGPL-3.0-only"
 
 [dependencies]
-# A fork carrying window_class / window_title / window_icon / cache_dir on top
-# of upstream eedaedc, submitted upstream as a PR; move back to
-# 0x48piraj/kurogane once it lands (build/linux/shell/README.md).
-kurogane = { git = "https://github.com/omartelo/kurogane", rev = "9bb9a6ae4e6224b18a9c0d65a046136648d854ab" }
+# The fork's `lich` branch: upstream eedaedc plus window_class / window_title /
+# window_icon / cache_dir (kurogane#11) and the macOS bundle's Contents/Frameworks
+# lookup (kurogane#13), the NSApplication kept to the browser process
+# (kurogane#14) and the subprocesses run as the bundle's helper app
+# (kurogane#15); move back to 0x48piraj/kurogane once they land
+# (build/linux/shell/README.md).
+kurogane = { git = "https://github.com/omartelo/kurogane", rev = "acc12a2f3ff4e8f06aab2da03532dbc50890e676" }
 
 # The taskbar groups windows by AppUserModelID (main.rs); nothing else of the
 # Win32 API is used.

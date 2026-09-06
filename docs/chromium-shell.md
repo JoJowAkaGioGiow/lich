@@ -1,9 +1,9 @@
 # Decision: move the shell from WebKitGTK to Chromium
 
-**Status: option 1 shipped in v0.4.0 (2026-07-15) and is still how Windows
-and macOS open the window. On Linux, option 2 shipped on 2026-09-05: lich
-bundles its own Chromium (CEF, through kurogane) and no browser is required —
-see the section at the end.**
+**Status: option 1 shipped in v0.4.0 (2026-07-15) and is still how an Intel
+Mac opens the window. Option 2 shipped on Linux on 2026-09-05, then on
+Windows and Apple Silicon: lich bundles its own Chromium (CEF, through
+kurogane) and no browser is required — see the section at the end.**
 
 ## Why
 
@@ -175,7 +175,29 @@ taskbar group the running window under the pinned icon. The sandbox stays
 off, as kurogane runs it, so the binary is a plain exe rather than CEF's
 `bootstrap.exe` loading a DLL. Built and smoke-tested on the CI runner only.
 
-macOS stays on option 1 for now: the window there means the CEF framework
-plus its helper apps laid out inside `Lich.app`, which kurogane does not
-bundle yet, and there is no hardware here to measure it on. `docs/ceilings.md`
-carries the gap.
+macOS ships the same window inside `Lich.app`, Apple Silicon only: the
+release runner is arm64 and builds the window for itself, and the Intel
+bundle keeps opening a system browser. `lich-shell` sits beside `lich` in
+`Contents/MacOS`, because macOS reads a process's bundle off its executable's
+path and only a process inside the bundle is `Lich.app` to the Dock, to
+Cmd-Tab and to the menu bar; the framework goes to `Contents/Frameworks`,
+where kurogane looks for it since
+[kurogane#13](https://github.com/0x48piraj/kurogane/pull/13). CEF's
+subprocesses run as the five helper apps beside the framework (`Lich
+Helper` and the Renderer, GPU, Plugin and Alerts variants, each a copy of
+the binary under an `LSUIElement` plist), the way CEF's own samples lay
+them out, and kurogane points `browser_subprocess_path` at the base one
+since [kurogane#15](https://github.com/0x48piraj/kurogane/pull/15). Both
+halves were measured on the runner before they were written: re-executing
+the window binary itself gave every subprocess a Dock tile of its own
+(four tiles for one window, until
+[kurogane#14](https://github.com/0x48piraj/kurogane/pull/14) kept the
+`NSApplication` to the browser process) and, inside a bundle, never started
+a renderer at all, since Chromium derives the renderer's executable from
+the helper's path and finds nothing there. The bundle is ad-hoc signed
+innermost first (ANGLE's dylibs, the framework, the helpers, the window,
+the app), never notarized. The window keeps its cookie
+store unencrypted (`CredentialStorage::Basic`): Chromium keys it through the
+Keychain to one code identity, and an ad-hoc signature is a new identity per
+build, so the alternative is a Keychain prompt on every start. Built and
+smoke-tested on the CI runner only, like Windows.
