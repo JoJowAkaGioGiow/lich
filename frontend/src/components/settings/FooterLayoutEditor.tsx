@@ -17,10 +17,6 @@ import {
   useSortable,
 } from "@dnd-kit/sortable"
 import {
-  ArrowLeft,
-  ArrowRight,
-  ChevronLeft,
-  ChevronRight,
   Clock,
   Code,
   Coins,
@@ -30,17 +26,18 @@ import {
   Gauge,
   GitBranch,
   GitPullRequestArrow,
-  GripVertical,
-  MoreHorizontal,
   Paperclip,
   Timer,
-  X,
   type LucideIcon,
 } from "lucide-react"
 import { dragStyle, useDragSensors } from "@/lib/use-sortable-list"
+import { formatModel } from "@/lib/model-name"
+import { useActiveSession } from "@/lib/session/use-active-session"
+import { useSessionAgent } from "@/lib/session/use-session-agent"
+import { useSessionUsage } from "@/lib/session/use-session-usage"
+import { ProviderIcon } from "@/components/ProviderIcon"
 import {
   FOOTER_ITEMS,
-  footerZone,
   hasFooterItem,
   isFooterItem,
   moveFooterItem,
@@ -50,13 +47,6 @@ import {
 } from "@/lib/footer-layout"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 
 const ICONS: Record<FooterItem, LucideIcon> = {
   attach: Paperclip,
@@ -73,11 +63,60 @@ const ICONS: Record<FooterItem, LucideIcon> = {
   clock: Clock,
 }
 const LABELS: Record<FooterZone, string> = {
-  available: "Available items",
-  left: "Left side",
-  right: "Right side",
+  available: "Available",
+  left: "Left",
+  right: "Right",
 }
+const exampleOf = (id: FooterItem) => FOOTER_ITEMS.find((item) => item.id === id)?.example ?? id
 const labelOf = (id: FooterItem) => FOOTER_ITEMS.find((item) => item.id === id)?.label ?? id
+
+interface ItemReadingProps {
+  id: FooterItem
+  /** The preview bar sets its own smaller glyph. */
+  small?: boolean
+}
+
+// What the item puts in the footer: its glyph and its reading. One component
+// for the chip, the drag overlay and the preview bar, so the thing under the
+// cursor is the thing that was picked up.
+function ItemReading({ id, small }: ItemReadingProps) {
+  if (id === "model") {
+    return <ModelReading small={small} />
+  }
+  const Icon = ICONS[id]
+  return (
+    <>
+      <Icon className={small ? "size-3" : undefined} aria-hidden="true" />
+      {exampleOf(id)}
+    </>
+  )
+}
+
+// The model slot is the one item whose footer reading is not a shape but a
+// fact: the provider's own mark and the model the active session is running,
+// which is what SessionModel draws. A made-up "Codex · GPT-6" named a provider
+// the footer never writes and pinned a model nobody chose.
+function ModelReading({ small }: { small?: boolean }) {
+  const { sessionId, kind } = useActiveSession()
+  const usage = useSessionUsage(sessionId)
+  const provider = useSessionAgent(sessionId) ?? kind
+  if (!usage?.model || !provider) {
+    const Icon = ICONS.model
+    return (
+      <>
+        <Icon className={small ? "size-3" : undefined} aria-hidden="true" />
+        {exampleOf("model")}
+      </>
+    )
+  }
+  return (
+    <>
+      <ProviderIcon kind={provider} size={small ? 12 : 14} />
+      {formatModel(usage.model)}
+      {usage.effort ? ` · ${usage.effort}` : ""}
+    </>
+  )
+}
 
 // Only a pointer inside a drop area may commit; inside it, items take precedence.
 const collisionDetection: CollisionDetection = (args) => {
@@ -140,33 +179,20 @@ export function FooterLayoutEditor({ layout, disabled, onChange }: FooterLayoutE
       onDragEnd={drop}
       onDragCancel={() => setDragging(null)}
     >
-      <div className="flex min-w-0 flex-col gap-5">
-        <FooterZoneView
-          zone="available"
-          items={available}
-          layout={layout}
-          disabled={disabled}
-          onMove={move}
-        />
-        <FooterZoneView
-          zone="left"
-          items={layout.left}
-          layout={layout}
-          disabled={disabled}
-          onMove={move}
-        />
-        <FooterZoneView
-          zone="right"
-          items={layout.right}
-          layout={layout}
-          disabled={disabled}
-          onMove={move}
-        />
+      <div className="flex min-w-0 flex-col gap-4">
+        {/* Two columns, one per end of the real footer, so an item sits on the
+            side it will show on. Available lands below them: what is in the
+            footer is what the pane is about. */}
+        <div className="grid min-w-0 grid-cols-2 gap-3">
+          <FooterZoneView zone="left" items={layout.left} layout={layout} disabled={disabled} />
+          <FooterZoneView zone="right" items={layout.right} layout={layout} disabled={disabled} />
+        </div>
+        <FooterZoneView zone="available" items={available} layout={layout} disabled={disabled} />
       </div>
       <DragOverlay>
         {dragging && (
-          <span className="rounded-md bg-popover px-3 py-2 text-xs shadow-md">
-            {labelOf(dragging)}
+          <span className="flex items-center gap-1.5 rounded-md bg-popover px-2.5 py-1.5 text-xs shadow-md">
+            <ItemReading id={dragging} />
           </span>
         )}
       </DragOverlay>
@@ -179,40 +205,38 @@ interface FooterZoneViewProps {
   items: FooterItem[]
   layout: FooterLayout
   disabled: boolean
-  onMove: (id: FooterItem, target: string) => void
 }
 
-function FooterZoneView({ zone, items, layout, disabled, onMove }: FooterZoneViewProps) {
+function FooterZoneView({ zone, items, layout, disabled }: FooterZoneViewProps) {
   const { setNodeRef, isOver } = useDroppable({
     id: zone,
     disabled,
     data: { empty: items.length === 0 },
   })
+  const side = zone !== "available"
   return (
-    <section className="min-w-0" aria-label={LABELS[zone]}>
-      <h3 className="mb-2 text-sm font-medium">{LABELS[zone]}</h3>
+    <section className="flex min-w-0 flex-col" aria-label={LABELS[zone]}>
+      <h3 className="mb-1.5 text-xs text-muted-foreground">{LABELS[zone]}</h3>
       <div
         ref={setNodeRef}
         data-footer-zone={zone}
         className={cn(
-          "flex min-h-12 flex-wrap items-center gap-1.5 border-y border-border px-1 py-3",
-          isOver && "bg-accent/50",
+          "flex flex-1 flex-wrap content-start items-center gap-1.5 rounded-lg p-2",
+          side ? "min-h-18 bg-sidebar" : "min-h-11",
+          // The outline is the answer to "does it land here", so it only exists
+          // while something is in the air; a permanent one reads as a border.
+          isOver && "ring-2 ring-ring",
+          zone === "right" && "justify-end",
         )}
       >
         <SortableContext items={items} strategy={rectSortingStrategy}>
           {items.map((id) => (
-            <FooterEditorItem
-              key={id}
-              id={id}
-              layout={layout}
-              disabled={disabled}
-              onMove={onMove}
-            />
+            <FooterEditorItem key={id} id={id} layout={layout} disabled={disabled} />
           ))}
         </SortableContext>
         {items.length === 0 && (
-          <p className="px-2 py-3 text-xs text-muted-foreground">
-            {zone === "available" ? "Drag here to hide an item" : "Drag items here"}
+          <p className="px-1 text-xs text-muted-foreground">
+            {zone === "available" ? "Every item is in the footer" : "Drag items here"}
           </p>
         )}
       </div>
@@ -224,10 +248,9 @@ interface FooterEditorItemProps {
   id: FooterItem
   layout: FooterLayout
   disabled: boolean
-  onMove: (id: FooterItem, target: string) => void
 }
 
-function FooterEditorItem({ id, layout, disabled, onMove }: FooterEditorItemProps) {
+function FooterEditorItem({ id, layout, disabled }: FooterEditorItemProps) {
   const {
     setNodeRef,
     setActivatorNodeRef,
@@ -237,14 +260,19 @@ function FooterEditorItem({ id, layout, disabled, onMove }: FooterEditorItemProp
     transition,
     isDragging,
   } = useSortable({ id, disabled })
-  const Icon = ICONS[id]
+  const inFooter = hasFooterItem(layout, id)
   return (
     <div
       ref={setNodeRef}
       style={dragStyle(transform, transition)}
       data-footer-item={id}
       className={cn(
-        "flex shrink-0 items-center rounded-md bg-accent/30",
+        // The chip carries the reading the footer will show, not the setting's
+        // name: an item is recognised by what it puts on screen. Nothing on it
+        // appears on hover: a control that grows under the pointer moves the
+        // chips beside it, which is exactly the moment a drag is being aimed.
+        "flex shrink-0 items-center rounded-md ring-1 ring-inset ring-border",
+        inFooter ? "bg-background" : "bg-transparent text-muted-foreground",
         isDragging && "opacity-30",
       )}
     >
@@ -256,76 +284,11 @@ function FooterEditorItem({ id, layout, disabled, onMove }: FooterEditorItemProp
         {...attributes}
         {...listeners}
         aria-label={`Move ${labelOf(id)}`}
-        className="touch-none cursor-grab active:cursor-grabbing"
+        className="touch-none cursor-grab tabular-nums active:cursor-grabbing"
       >
-        <GripVertical data-icon="inline-start" />
-        <Icon />
-        {labelOf(id)}
+        <ItemReading id={id} />
       </Button>
-      <FooterItemMenu id={id} layout={layout} disabled={disabled} onMove={onMove} />
-      {hasFooterItem(layout, id) && (
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          disabled={disabled}
-          aria-label={`Remove ${labelOf(id)}`}
-          onClick={() => onMove(id, "available")}
-        >
-          <X />
-        </Button>
-      )}
     </div>
-  )
-}
-
-function FooterItemMenu({ id, layout, disabled, onMove }: FooterEditorItemProps) {
-  const zone = footerZone(layout, id)
-  const items = zone === "available" ? [] : layout[zone]
-  const index = items.indexOf(id)
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        aria-label={`Options for ${labelOf(id)}`}
-        render={<Button variant="ghost" size="icon-xs" disabled={disabled} />}
-      >
-        <MoreHorizontal />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent>
-        <DropdownMenuGroup>
-          {zone !== "left" && (
-            <DropdownMenuItem onClick={() => onMove(id, "left")}>
-              <ArrowLeft />
-              {zone === "available" ? "Add to left" : "Move to left"}
-            </DropdownMenuItem>
-          )}
-          {zone !== "right" && (
-            <DropdownMenuItem onClick={() => onMove(id, "right")}>
-              <ArrowRight />
-              {zone === "available" ? "Add to right" : "Move to right"}
-            </DropdownMenuItem>
-          )}
-          {zone !== "available" && (
-            <>
-              <DropdownMenuItem disabled={index <= 0} onClick={() => onMove(id, items[index - 1])}>
-                <ChevronLeft />
-                Move earlier
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                disabled={index >= items.length - 1}
-                onClick={() => onMove(id, items[index + 1])}
-              >
-                <ChevronRight />
-                Move later
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => onMove(id, "available")}>
-                <X />
-                Remove from footer
-              </DropdownMenuItem>
-            </>
-          )}
-        </DropdownMenuGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
   )
 }
 
@@ -355,15 +318,11 @@ export function FooterLayoutPreview({ layout }: FooterLayoutPreviewProps) {
                 side === "right" && "ml-auto justify-end",
               )}
             >
-              {layout[side].map((id) => {
-                const Icon = ICONS[id]
-                return (
-                  <span key={id} className="flex items-center gap-1 tabular-nums">
-                    <Icon className="size-3" aria-hidden="true" />
-                    {FOOTER_ITEMS.find((item) => item.id === id)?.example}
-                  </span>
-                )
-              })}
+              {layout[side].map((id) => (
+                <span key={id} className="flex items-center gap-1 tabular-nums">
+                  <ItemReading id={id} small />
+                </span>
+              ))}
             </div>
           ))}
           {layout.left.length + layout.right.length === 0 && (
