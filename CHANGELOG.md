@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without ever saying why. A session the rung would confine today now carries a
   crossed shield, and the tooltip on either side of the disagreement says to
   reopen the session to apply the setting.
+- **`lich cost` now says whose arithmetic each dollar is.** A new `source`
+  column, carried in `--json` and `--csv` too, marks a row `priced` where lich
+  derived the money from Claude Code's and Codex's token counts and `reported`
+  where oh-my-pi, opencode or Crush handed over the figure they computed
+  themselves. A project that ran both reads `mixed`, and a total that mixes them
+  gains a line splitting the sessions between the two.
 - **A session card now says why it cannot be forked.** "Fork to worktree…" used
   to be missing altogether on Antigravity, oh-my-pi, Crush, Cursor CLI and Kiro
   CLI cards, so the offer looked lost rather than withheld. The item is there
