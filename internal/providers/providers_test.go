@@ -3,6 +3,7 @@ package providers
 import (
 	"errors"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -196,4 +197,137 @@ func TestCostSourceOfNamesEveryRung(t *testing.T) {
 	if got := CostSourceOf("shell"); got != CostSourceNone {
 		t.Errorf("CostSourceOf(shell) = %q, want no rung", got)
 	}
+}
+
+// TestDetectCountsAConfiguredBinary is the trap this reading exists to close: a
+// machine whose only agent is reached through the binary setting used to read as
+// a machine with nothing on it, so every implicit new session opened a terminal.
+// The three answers a setting can give are pinned together — accepted, rejected,
+// absent — because it is the same branch deciding all three.
+func TestDetectCountsAConfiguredBinary(t *testing.T) {
+	wrapper := configuredPath(t, "claude-wrapper")
+	configured := map[string]string{
+		Claude: wrapper,
+		Codex:  configuredPath(t, "gone"),
+	}
+	svc := &Service{
+		// Nothing at all on PATH: the bare machine the bullet described.
+		lookPath: func(name string) (string, error) {
+			if name == wrapper {
+				return name, nil
+			}
+			return "", exec.ErrNotFound
+		},
+		configuredBin: func(id string) string { return configured[id] },
+	}
+
+	got, err := svc.Detect()
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if !got[0].Installed || got[0].Path != wrapper {
+		t.Errorf("claude = %+v, want installed at the configured path", got[0])
+	}
+	if got[0].Source != SourceSetting {
+		t.Errorf("claude source = %q, want %q", got[0].Source, SourceSetting)
+	}
+	// A configured binary that does not resolve is still the spawn's answer, so
+	// the provider is not installed — and it says nothing about where from.
+	if got[1].Installed || got[1].Source != "" {
+		t.Errorf("codex = %+v, want not installed with no source", got[1])
+	}
+	// Nothing configured and nothing on PATH is the machine it always was.
+	if got[2].Installed || got[2].Source != "" {
+		t.Errorf("antigravity = %+v, want not installed with no source", got[2])
+	}
+}
+
+// TestDetectPrefersTheConfiguredBinary pins the precedence against the spawn's:
+// terminal reads store.ProviderBin before falling back to the provider's own
+// command, so a configured binary decides even when $PATH has one — reporting
+// the $PATH hit would name a binary no session of this provider would run.
+func TestDetectPrefersTheConfiguredBinary(t *testing.T) {
+	missing := configuredPath(t, "gone")
+	svc := &Service{
+		lookPath: func(name string) (string, error) {
+			if name == "claude" {
+				return "/usr/bin/claude", nil
+			}
+			return "", exec.ErrNotFound
+		},
+		configuredBin: func(id string) string {
+			if id == Claude {
+				return missing
+			}
+			return ""
+		},
+	}
+
+	got, err := svc.Detect()
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if got[0].Installed || got[0].Path != "" {
+		t.Errorf("claude = %+v, want the broken override to answer, not $PATH", got[0])
+	}
+}
+
+// TestDetectSourceIsPathWhenNothingIsConfigured keeps the new field honest for
+// the machine that has changed nothing: a $PATH hit says so, and a Service with
+// no settings reader behind it (`lich doctor`, `lich rage`) scans PATH alone.
+func TestDetectSourceIsPathWhenNothingIsConfigured(t *testing.T) {
+	svc := &Service{
+		lookPath: func(name string) (string, error) {
+			if name == "claude" {
+				return "/usr/bin/claude", nil
+			}
+			return "", exec.ErrNotFound
+		},
+	}
+
+	got, err := svc.Detect()
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if got[0].Source != SourcePath || got[0].Path != "/usr/bin/claude" {
+		t.Errorf("claude = %+v, want %q at /usr/bin/claude", got[0], SourcePath)
+	}
+	if got[1].Source != "" {
+		t.Errorf("codex source = %q, want empty when nothing was found", got[1].Source)
+	}
+}
+
+// TestSetConfiguredBinIsWhatDetectReads proves the seam main.go wires, rather
+// than the field a test can set directly: the settings store cannot be reached
+// from this package, so a Detect that stopped calling the injected reader would
+// pass every test above and ship the bug back.
+func TestSetConfiguredBinIsWhatDetectReads(t *testing.T) {
+	svc := &Service{lookPath: func(string) (string, error) { return "", exec.ErrNotFound }}
+	if got, _ := svc.Detect(); got[0].Installed {
+		t.Fatal("claude installed before any binary was configured")
+	}
+
+	wrapper := configuredPath(t, "claude")
+	svc.SetConfiguredBin(func(id string) string {
+		if id == Claude {
+			return wrapper
+		}
+		return ""
+	})
+	svc.lookPath = func(name string) (string, error) { return name, nil }
+
+	got, _ := svc.Detect()
+	if !got[0].Installed || got[0].Source != SourceSetting {
+		t.Errorf("claude = %+v, want installed from the setting", got[0])
+	}
+}
+
+// configuredPath spells what a user types into the binary setting, absolute for
+// the OS the test is running on. It matters: Verify answers CheckRelative for a
+// path that names a location without naming it from the root, and a POSIX path
+// is exactly that on Windows — no drive letter, so filepath.IsAbs says no. The
+// file is never created; every test above resolves it through a fake lookPath.
+func configuredPath(t *testing.T, name string) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), name)
 }
