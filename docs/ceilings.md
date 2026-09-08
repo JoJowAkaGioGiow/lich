@@ -276,19 +276,6 @@ work when nobody knows it and that the call site never shows. The mechanism and 
   it was branched from, so the pair reports roughly twice what one conversation spent. It is the same
   arithmetic as the `(session, transcript)` bullet above, arrived at deliberately rather than by accident —
   a lich-driven fork makes that path ordinary.
-- **A missing tool is answered from the launch's `PATH`** (`frontend/src/lib/vcs-tools.ts`): the git and gh
-  checks resolve through the `PATH` lich pinned at startup (`terminal.PinPath`), so installing either one
-  while lich is open leaves every surface still calling it missing until a restart. Each of them says so; a
-  live re-resolve would mean re-running the login shell under the running process. The check is
-  `exec.LookPath` — it proves the binary exists and runs, never that it works, so a git that fails on the
-  repository itself keeps failing the old silent way.
-- **Check again re-scans the boot `PATH`, never the login shell** (`internal/providers.Detect`,
-  `frontend/src/lib/providers-store.ts`, `refresh`): the provider surfaces re-probe on demand, so an agent
-  installed into a directory that `PATH` already carried appears without a relaunch — and one installed into a
-  directory that `PATH` did not carry never appears at all, however many times the button is pressed. The scan
-  itself is not what would break: re-resolving `PATH` means re-running `$SHELL -lic env` (`ResolveShellEnv`), and
-  a login shell that hangs on a prompt would hang the button rather than the boot. That machine's way in is a
-  relaunch, or a binary path in Settings › Providers — and nothing at the button says so.
 - **A machine with no agent on PATH opens terminals, and a custom binary path looks like one**
   (`frontend/src/lib/providers-store.ts`, `resolveImplicitSessionKind`): with nothing installed, every implicit
   new session — the empty screen's button, the hotkey, a new worktree — spawns a shell, because the provider
