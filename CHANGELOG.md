@@ -45,7 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of those names tells you why it is missing. The tree also re-reads on the same
   cadence a repository's does, so a file the agent just wrote shows up while you
   watch.
-
+- **A session renamed from the inside is now reachable under its new name.** A
+  `/rename` typed in a Claude Code session changed the name it answers to in the
+  peer roster, but lich kept addressing it by the name it had passed at spawn —
+  so `lich send`, `lich close` and the `list_sessions` tool all named a session
+  that no longer answered. lich now reads the name back out of the session's own
+  record, and a card restarted after a rename keeps the name it was given.
 - **Each browser now gets its own window profile.** lich kept one Chromium
   profile for whichever browser it opened, so installing a second one, changing
   the desktop default or pinning `--browser` handed one browser's profile to
