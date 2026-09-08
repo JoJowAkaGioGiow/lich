@@ -71,6 +71,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A render bug in the terminal area no longer blanks the window.** The stage
+  and every pane in it are now caught: the pane that stopped rendering says so
+  by name, its neighbours keep painting, and a retry puts it back — or, when a
+  second try throws too, offers the reload rather than the same button. The terminals
+  themselves survive it — the same xterm, the same scrollback, the same
+  selection and modes, and output that arrived meanwhile is still there — so
+  recovering no longer means reloading the window over sessions that never
+  stopped running.
 - **A forked session is no longer billed for the history it was branched from.**
   The copy is a conversation of its own carrying every token of the original, so
   the two cards together reported roughly twice what one conversation had spent,
