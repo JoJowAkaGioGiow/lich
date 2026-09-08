@@ -57,6 +57,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A closed project is now findable by name, however long ago it was closed.**
+  Only the twenty-five most recent closes were ever offered back, so an older
+  project was reachable only by hunting its directory in the folder picker, and
+  neither the reopen menu nor the palette said so. Typing in the command palette
+  now searches every closed project there has ever been, by name and by path,
+  and its Closed group says how many matches it is showing of how many it found.
+  The reopen menu still lists the newest five, with a line under them naming how
+  many more the palette can reach.
 - **The palette's History tab now finds a parked session by its branch, and says
   when it held back rows.** The search ran over a session's name, its project and
   its path while the branch was read from git afterwards, so a row showing
