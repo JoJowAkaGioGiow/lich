@@ -8,7 +8,12 @@ export interface RemoteResource<T> {
   data: T
   loading: boolean
   error: string | null
-  refresh: () => void
+  /** Run the lookup again. The promise settles once the answer is in `data` or
+   * the failure in `error`, and never rejects — a caller that only wants the
+   * refetch ignores it, and one that reports an outcome ("Checked." against
+   * "Check failed") awaits it and then reads `error`, which is where the
+   * failure went. */
+  refresh: () => Promise<void>
 }
 
 export interface RemoteResourceOptions<T> {
@@ -82,13 +87,13 @@ export function useRemoteResource<T>(
   const emptyRef = useRef(empty)
   emptyRef.current = empty
 
-  const refresh = useCallback(() => {
+  const refresh = useCallback((): Promise<void> => {
     if (!key) {
       seq.current++
       setData(emptyRef.current)
       setError(null)
       setLoading(false)
-      return
+      return Promise.resolve()
     }
     const mine = ++seq.current
     // A request whose last answer is in hand revalidates underneath: the screen
@@ -99,7 +104,7 @@ export function useRemoteResource<T>(
     if (!cache || readRemoteCache(cache) === undefined) {
       setLoading(true)
     }
-    loadRef
+    return loadRef
       .current()
       .then((result) => {
         // Filed before the sequence check: the key is this closure's own, so a
@@ -114,9 +119,13 @@ export function useRemoteResource<T>(
       })
       .catch((err: unknown) => {
         if (mine !== seq.current) return
-        // The filed answer is left standing: a lookup that failed says nothing
-        // about the last one that worked, and the next success replaces it.
-        setData(emptyRef.current)
+        // The filed answer is left standing, on the screen as well as in the
+        // cache: a lookup that failed says nothing about the last one that
+        // worked, and a caller that keeps its answers would otherwise blank a
+        // pane it is about to paint again on the next visit. Everyone else
+        // falls back to empty, where a stale readout has nothing to stand on.
+        const filed = cache ? readRemoteCache<T>(cache) : undefined
+        setData(filed ?? emptyRef.current)
         setError(errorText(err))
       })
       .finally(() => {
@@ -133,7 +142,7 @@ export function useRemoteResource<T>(
   }
 
   useEffect(() => {
-    refresh()
+    void refresh()
     if (refetchOnFocus) {
       window.addEventListener("focus", refresh)
     }

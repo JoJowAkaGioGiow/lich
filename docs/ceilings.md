@@ -769,6 +769,9 @@ work when nobody knows it and that the call site never shows. The mechanism and 
   directory that is gone. The window is one round-trip (it re-reads on mount, on focus, and after this screen
   creates a checkout itself) and git refuses the wrong move anyway, which is why it is filed rather than left
   cold — but it is the one to think twice about before the next `cache` is added to something a button reads.
+  The plugin rows on Settings › Updates (`PluginSetting`) are the second case: a plugin installed or removed
+  from a terminal while the user was elsewhere is painted as it was on the way back in, so the row offers an
+  Install that has already happened, or withholds one that has not, until that visit's read lands.
 - **Unsent prose on the pull request screen lives in memory, and nothing collects it**
   (`frontend/src/lib/pulls/draft-store.ts`): a description, a comment and every thread reply survive each
   unmount the screen can produce, and none of them survives a reload — unlike the pending review beside them,
@@ -844,12 +847,6 @@ work when nobody knows it and that the call site never shows. The mechanism and 
   seen, and the ones who have not will read the binary they install. A wrong headline is a patch release. The
   update toast reads nothing from the release but its tag, on purpose: the toast says a release exists, and
   the dialog is where it speaks.
-- **`agentplugin.Status` is the one settings read that is not remembered** (`UpdatesSettings.tsx`): it costs
-  ~180 ms and its rows blank on every visit to Updates, while every other read on the screen paints from the
-  last answer. It is not an oversight — `PluginSetting` awaits that read for its *outcome*, telling "Checked."
-  from "Check failed — are you online?", and `useRemoteResource`'s `refresh` is fire-and-forget with the
-  failure folded into state, so there is nothing to await. Caching it means rewiring both of that pane's flows
-  around a resource's `loading` and `error`, and that is the price, not a line of config.
 - **`useBinaryCheck` is deliberately not a `useRemoteResource` caller** (`frontend/src/lib/use-binary-check.ts`):
   it answers `null` until a verdict is in and debounces its input, because the value it checks arrives one
   keystroke at a time — and `useRemoteResource` has no debounce seam to hang that on. So the path verdicts on
