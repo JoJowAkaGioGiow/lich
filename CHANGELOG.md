@@ -35,6 +35,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Files tab is browsable in a plain folder.** A directory that is not a
+  repository has no `.gitignore` for lich to obey, so the tree listed
+  `node_modules`, `target`, `dist` and their kind like any other folder, stopped
+  at 20,000 files without saying so, and only re-read when you left the panel
+  and came back. Those directories are now skipped by name, and the line under
+  the rows says which ones this folder had ("Hidden: build, node_modules") and
+  whether the listing hit the cap, so a folder keeping its own source under one
+  of those names tells you why it is missing. The tree also re-reads on the same
+  cadence a repository's does, so a file the agent just wrote shows up while you
+  watch.
+
 - **Each browser now gets its own window profile.** lich kept one Chromium
   profile for whichever browser it opened, so installing a second one, changing
   the desktop default or pinning `--browser` handed one browser's profile to
