@@ -994,45 +994,112 @@ func awaitDelivered(t *testing.T, svc *Service, n int) {
 	t.Fatalf("never saw %d delivered tickets", n)
 }
 
-// TestADoneClosesOnlyTheTurnsOwnErrand proves a turn answers for one errand.
-// Two messages delivered back to back — inside the second or two before the
-// target's busy report lands — queue as two turns; the first turn's end must
-// not report the second errand as answered elsewhere while its message is
-// still queued, unread.
-func TestADoneClosesOnlyTheTurnsOwnErrand(t *testing.T) {
-	svc := newRelay(workspace(), newFakeTerminal("s1", "s2", "s3"), nil)
+// TestADoneWithTwoErrandsOpenStallsBothAndAsksForTheTicket proves what a turn
+// ending says, and what it does not. Two messages delivered back to back —
+// inside the second or two before the target's busy report lands — queue as two
+// turns, and the end of the first says only that a turn ended without an answer
+// here. That is the same true thing about every errand it could have been, so
+// every one of them takes the stall path a single errand takes and every sender
+// hears what it would have heard alone. What nothing here can say is which of
+// them that turn was — so the answer is not put on one of them by delivery
+// order, and the worker is asked at its own prompt to name the ticket.
+func TestADoneWithTwoErrandsOpenStallsBothAndAsksForTheTicket(t *testing.T) {
+	term := newFakeTerminal("s1", "s2", "s3")
+	events := &fakeEvents{}
+	svc := newRelay(workspace(), term, events)
 
 	first := make(chan Result, 1)
 	go func() {
-		got, _ := svc.Send("s1", "docs", "", "task one", 5)
+		got, _ := svc.Send("s1", "docs", "", "run the tests and report the failures", 5)
 		first <- got
 	}()
 	awaitDelivered(t, svc, 1)
 	second := make(chan Result, 1)
 	go func() {
-		got, _ := svc.Send("s3", "docs", "", "task two", 5)
+		got, _ := svc.Send("s3", "docs", "", "build the docs", 5)
 		second <- got
 	}()
 	awaitDelivered(t, svc, 2)
+	delivery := len(term.writesTo("s2"))
+	tickets := openTickets(svc)
 
-	// The target picks the first task up and ends that turn without replying.
 	svc.Observe("s2", "busy")
 	svc.Observe("s2", "done")
-	if got := <-first; got.Status != StatusUnanswered {
-		t.Fatalf("first errand = %q, want %q", got.Status, StatusUnanswered)
+
+	for _, got := range []Result{<-first, <-second} {
+		if got.Status != StatusUnanswered {
+			t.Errorf("status = %q, want %q for both errands the turn could have been",
+				got.Status, StatusUnanswered)
+		}
 	}
-	select {
-	case got := <-second:
-		t.Fatalf("the first turn's end closed the second errand too: %+v", got)
-	case <-time.After(50 * time.Millisecond):
+	if halts := events.stalled(); len(halts) != 2 {
+		t.Errorf("stall events = %d, want one per sender", len(halts))
+	}
+	if left := openTickets(svc); len(left) != 0 {
+		t.Errorf("open tickets = %v, want both closed by the turn that ended", left)
 	}
 
-	// The queued second task runs as its own turn.
+	if !awaitWrites(term, "s2", delivery+2) {
+		t.Fatal("the worker was never asked to name the ticket")
+	}
+	notice := strings.Join(term.writesTo("s2")[delivery:], "")
+	for _, want := range []string{
+		"[lich]", "run the tests and report the failures", "build the docs",
+		"went back to their senders unanswered", "The next request you answer has to name its ticket",
+	} {
+		if !strings.Contains(notice, want) {
+			t.Errorf("the notice is missing %q:\n%s", want, notice)
+		}
+	}
+	// The tickets are named as what happened, never as somewhere to reply: the
+	// stall closed them, so a worker that ran a reply command out of this note
+	// would be told the ticket is unknown.
+	for _, id := range tickets {
+		if !strings.Contains(notice, id) {
+			t.Errorf("the notice does not name ticket %q:\n%s", id, notice)
+		}
+		if strings.Contains(notice, "lich reply "+id) {
+			t.Errorf("the notice invites a reply to closed ticket %q:\n%s", id, notice)
+		}
+	}
+}
+
+// A single errand is the case there is nothing to pick between: it is stalled
+// on its own, and the worker is not asked to name anything.
+func TestADoneWithOneErrandOpenStallsItWithoutANotice(t *testing.T) {
+	term := newFakeTerminal("s1", "s2")
+	svc := newRelay(workspace(), term, &fakeEvents{})
+
+	only := make(chan Result, 1)
+	go func() {
+		got, _ := svc.Send("s1", "docs", "", "run the tests", 5)
+		only <- got
+	}()
+	awaitDelivered(t, svc, 1)
+	delivery := len(term.writesTo("s2"))
+
 	svc.Observe("s2", "busy")
 	svc.Observe("s2", "done")
-	if got := <-second; got.Status != StatusUnanswered {
-		t.Fatalf("second errand = %q, want %q", got.Status, StatusUnanswered)
+
+	if got := <-only; got.Status != StatusUnanswered {
+		t.Fatalf("status = %q, want %q", got.Status, StatusUnanswered)
 	}
+	time.Sleep(50 * time.Millisecond)
+	if got := len(term.writesTo("s2")); got != delivery {
+		t.Errorf("writes = %d, want no notice: there was only one errand to be", got)
+	}
+}
+
+// openTickets is every errand still on the table, for a test that has to know
+// what was closed and what the worker was told about.
+func openTickets(svc *Service) []string {
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	ids := make([]string, 0, len(svc.tickets))
+	for id := range svc.tickets {
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 // TestASecondErrandQueuedMidTurnSurvivesTheFirstsEnd is the same guarantee with
@@ -1467,13 +1534,48 @@ func TestReplyRefusesUnknownAndRepeatedTickets(t *testing.T) {
 // reaches the ticket answers its own session's open request, and with several
 // open the oldest delivery is closed first — the order every provider hands
 // queued tasks to its agent in.
-func TestReplyWithoutATicketAnswersTheOldestErrandDelivered(t *testing.T) {
+// TestReplyWithoutATicketAnswersTheOneOpenErrand is the case the shorthand
+// exists for: an agent whose context was compacted past the message can still
+// send its answer home, because one open request needs no guessing.
+func TestReplyWithoutATicketAnswersTheOneOpenErrand(t *testing.T) {
+	events := &fakeEvents{}
+	svc := newRelay(workspace(), newFakeTerminal("s1", "s2"), events)
+
+	only := make(chan Result, 1)
+	go func() {
+		got, _ := svc.Send("s1", "docs", "", "run the tests", 30)
+		only <- got
+	}()
+	if !events.awaitMark("s1", DirectionOut) {
+		t.Fatal("the message was never delivered")
+	}
+
+	if err := svc.Reply("s2", "", "3 failures in foo_test"); err != nil {
+		t.Fatalf("Reply: %v", err)
+	}
+	select {
+	case got := <-only:
+		if got.Answer != "3 failures in foo_test" {
+			t.Errorf("answer = %q", got.Answer)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the open errand was never answered")
+	}
+}
+
+// TestReplyWithoutATicketIsRefusedWithTwoErrandsOpen pins the refusal that
+// replaced the guess. Nothing in an answer says which request it belongs to, so
+// a session working two tasks that answers the second one first used to send it
+// home as the answer to the first — two senders reading a confident report of
+// work nobody did. The refusal has to name both tickets and what each asked, or
+// the agent has nothing to retry with.
+func TestReplyWithoutATicketIsRefusedWithTwoErrandsOpen(t *testing.T) {
 	events := &fakeEvents{}
 	svc := newRelay(workspace(), newFakeTerminal("s1", "s2", "s3"), events)
 
 	first := make(chan Result, 1)
 	go func() {
-		got, _ := svc.Send("s1", "docs", "", "run the tests", 30)
+		got, _ := svc.Send("s1", "docs", "", "run the tests and report the failures", 30)
 		first <- got
 	}()
 	if !events.awaitMark("s1", DirectionOut) {
@@ -1488,30 +1590,53 @@ func TestReplyWithoutATicketAnswersTheOldestErrandDelivered(t *testing.T) {
 		t.Fatal("the second message was never delivered")
 	}
 
-	if err := svc.Reply("s2", "", "3 failures in foo_test"); err != nil {
-		t.Fatalf("Reply: %v", err)
+	err := svc.Reply("s2", "", "docs are built")
+	if err == nil {
+		t.Fatal("a ticketless answer was accepted with two errands open")
 	}
-	select {
-	case got := <-first:
-		if got.Answer != "3 failures in foo_test" {
-			t.Errorf("answer = %q", got.Answer)
+	ids := openTickets(svc)
+	if len(ids) != 2 {
+		t.Fatalf("open tickets = %v, want the two that were sent", ids)
+	}
+	for _, id := range ids {
+		if !strings.Contains(err.Error(), id) {
+			t.Errorf("the refusal does not name ticket %q:\n%s", id, err)
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("the oldest errand was not the one answered")
 	}
-	select {
-	case got := <-second:
-		t.Fatalf("the second errand was closed by the same answer: %+v", got)
-	default:
+	for _, asked := range []string{"run the tests and report the failures", "build the docs"} {
+		if !strings.Contains(err.Error(), asked) {
+			t.Errorf("the refusal does not say what %q asked:\n%s", asked, err)
+		}
 	}
 
-	// The next answer takes the next errand, which is what makes this usable
-	// twice over rather than only for a session with exactly one request open.
-	if err := svc.Reply("s2", "", "docs are built"); err != nil {
-		t.Fatalf("Reply: %v", err)
+	// Neither errand was closed by the refused answer, and naming the ticket is
+	// the retry the message asked for all along.
+	select {
+	case got := <-first:
+		t.Fatalf("the refused answer closed an errand anyway: %+v", got)
+	case got := <-second:
+		t.Fatalf("the refused answer closed an errand anyway: %+v", got)
+	default:
 	}
-	if got := <-second; got.Answer != "docs are built" {
-		t.Errorf("second answer = %q", got.Answer)
+	if err := svc.Reply("s2", ids[0], "answered by name"); err != nil {
+		t.Fatalf("Reply with a ticket: %v", err)
+	}
+}
+
+// TestAnErrandIsNamedByTheOpeningOfItsPrompt covers the line the refusal reads
+// by: whitespace collapsed onto one line, and a long prompt cut on a rune
+// boundary — the cut is in bytes, and half a rune is a replacement character in
+// the middle of the one line that tells two errands apart.
+func TestAnErrandIsNamedByTheOpeningOfItsPrompt(t *testing.T) {
+	if got := askedExcerpt("run the tests\n\nthen  report"); got != "run the tests then report" {
+		t.Errorf("excerpt = %q", got)
+	}
+	long := askedExcerpt(strings.Repeat("é", 200))
+	if !strings.HasSuffix(long, "…") {
+		t.Errorf("a prompt over the limit was not cut: %q", long)
+	}
+	if !utf8.ValidString(long) {
+		t.Errorf("the cut landed inside a rune: %q", long)
 	}
 }
 
@@ -1523,24 +1648,24 @@ func TestReplyWithoutATicketAnswersTheOldestErrandDelivered(t *testing.T) {
 //
 // The two tickets here share a delivered time exactly, which is the case the
 // runner hits by accident: any ordering that reads the clock has nothing left
-// to choose by, and only the hand-off counter still answers.
+// to choose by, and only the hand-off counter still answers. Nothing picks one
+// of two candidates anymore, but the order they are listed in is what a worker
+// reads to tell them apart, and a list that shuffles between two runs is one it
+// cannot.
 func TestErrandOrderSurvivesAClockThatCannotTellThemApart(t *testing.T) {
 	svc := newRelay(workspace(), newFakeTerminal("s1", "s2", "s3"), &fakeEvents{})
 	tick := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
-	svc.tickets = map[string]*ticket{
-		"second": {fromID: "s3", targetID: "s2", delivered: tick, deliverySeq: 2},
-		"first":  {fromID: "s1", targetID: "s2", delivered: tick, deliverySeq: 1},
-	}
 
 	// Run it more than once: one pass can pick the right entry out of a map by
 	// luck, and luck is the thing being tested away.
 	for i := 0; i < 50; i++ {
-		got, err := svc.errandOfLocked("s2")
-		if err != nil {
-			t.Fatalf("errandOfLocked: %v", err)
+		svc.tickets = map[string]*ticket{
+			"second": {fromID: "s3", targetID: "s2", delivered: tick, deliverySeq: 2, sawBusy: true},
+			"first":  {fromID: "s1", targetID: "s2", delivered: tick, deliverySeq: 1, sawBusy: true},
 		}
-		if got != "first" {
-			t.Fatalf("errand = %q, want the first delivered", got)
+		got := svc.turnCandidates("s2")
+		if len(got) != 2 || got[0] != "first" {
+			t.Fatalf("candidates = %v, want the first delivered at the front", got)
 		}
 	}
 }

@@ -18,6 +18,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A relayed answer is no longer matched to a task by guesswork.** Nothing in
+  an answer says which request it belongs to, so `lich reply "<answer>"` and
+  `reply_to_session` without a ticket closed the oldest request delivered to
+  that session: a session working two relayed tasks that answered the second one
+  first sent it home as the answer to the first, and both senders read a
+  confident report of work nobody did. With two or more requests open the answer
+  is now refused, listing every open ticket with the opening of what it asked so
+  the retry names the right one. The same guess ran one step later, when a turn
+  ended with no answer at all and the oldest request was reported as answered
+  somewhere else: every request that turn could have been is now reported that
+  way — it is what each sender would have been told alone — and the worker is
+  asked at its prompt to name the ticket. One open request behaves as before on
+  both paths.
 - **The sandbox's "Ask each time" rung now reaches every session.** It only ever
   asked in the New worktree dialog, so a session started from the New session
   menu, by another session, or through the MCP tool quietly ran on the machine.

@@ -92,6 +92,23 @@ func replyInstruction(hasTools bool, ticketID string) string {
 		"and the detail is in your commits and files anyway."
 }
 
+// pickTicketNudge is what a worker is told at its own prompt after a turn that
+// ended with none of its errands answered. Those errands are over by the time it
+// reads this — every one the turn could have been went home unanswered, which is
+// the same true thing about each of them — so they are named as history and not
+// as somewhere to reply: a ticket the relay has closed answers "unknown ticket",
+// and a note that invites that is worse than no note. What it asks for is the
+// next answer, which is the one that can still name its ticket.
+func pickTicketNudge(count int, errands string) string {
+	return fmt.Sprintf(
+		"[lich] Your turn ended with no answer sent, so %d requests went back to their senders "+
+			"unanswered:\n%s\nNothing outside this session can say which of them that turn was, "+
+			"which is why none of them could be answered for you. The next request you answer has "+
+			"to name its ticket: lich reply <ticket> \"<answer>\".",
+		count, errands,
+	)
+}
+
 // nudgeNotice is the one line typed at a sender's prompt when results are
 // waiting and nobody is holding the line for them. It replaces typing the
 // results themselves: N results landing as N prompt submissions each restart

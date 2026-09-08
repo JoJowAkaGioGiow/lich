@@ -1,6 +1,9 @@
 package relay
 
-import ()
+import (
+	"log/slog"
+	"sort"
+)
 
 // Observe takes one session-state report from the hooks the provider already
 // runs (docs/hooks/session-state.md). It exists for one case: a target that
@@ -18,7 +21,7 @@ import ()
 func (s *Service) Observe(sessionID, state string) {
 	s.mu.Lock()
 	s.recordState(sessionID, state)
-	ended := s.endedErrands(sessionID, state)
+	ended, notice := s.endedErrands(sessionID, state)
 	// A waiter still holding the line carries the news out through its own
 	// select; an errand nobody is attending is stashed for the sender instead,
 	// the way an answer would be. Without it the promise a pending result makes
@@ -41,6 +44,11 @@ func (s *Service) Observe(sessionID, state string) {
 	}
 	for _, e := range quiet {
 		s.stash(e.id, e.t, StatusUnanswered, "")
+	}
+	if notice != "" {
+		if err := s.deliver(sessionID, notice); err != nil {
+			slog.Warn("relay: ticket request not delivered", "session", sessionID, "err", err)
+		}
 	}
 	// This session as a sender: its turn ending frees its prompt, which is what
 	// a nudge held back during the turn was waiting for.
@@ -95,11 +103,16 @@ func (s *Service) recordState(sessionID, state string) {
 
 }
 
-// endedErrands takes every ticket the report ends off the table and closes
-// its stall channel, for Observe to announce outside the lock. Called with
-// s.mu held.
-func (s *Service) endedErrands(sessionID, state string) []endedErrand {
+// endedErrands takes every ticket the report ends off the table and closes its
+// stall channel, for Observe to announce outside the lock. Called with s.mu
+// held.
+//
+// It returns one more thing for a turn that could have been either of two
+// errands: the notice asking the worker to name the ticket next time, for
+// Observe to type outside the lock.
+func (s *Service) endedErrands(sessionID, state string) ([]endedErrand, string) {
 	var ended []endedErrand
+	notice := ""
 	switch state {
 	case stateBusy:
 		for _, t := range s.tickets {
@@ -122,25 +135,52 @@ func (s *Service) endedErrands(sessionID, state string) []endedErrand {
 			}
 		}
 	case stateDone:
-		if id, t := s.turnErrand(sessionID); t != nil {
+		candidates := s.turnCandidates(sessionID)
+		// Worded before the tickets go, because it is read off them — and only
+		// where the turn could have been either: with one candidate there is
+		// nothing to pick between.
+		if len(candidates) > 1 {
+			notice = pickTicketNudge(len(candidates), namedErrands(s.tickets, candidates))
+		}
+		// What the ending says is the same thing about every errand it could
+		// have been — the target finished a turn and did not answer this one —
+		// and that is true of each of them whichever one it worked on. So they
+		// all take the path a single one takes: no sender hears anything the
+		// others could not also have been told. Naming which one that turn *was*
+		// is the part nothing here can do, and the notice above is what asks the
+		// worker for it.
+		for _, id := range candidates {
+			t := s.tickets[id]
 			delete(s.tickets, id)
 			close(t.stalled)
 			ended = append(ended, endedErrand{id, t})
 		}
 	}
-	return ended
+	return ended, notice
 }
 
-// turnErrand decides which of a target's errands the turn that just ended
-// belongs to, and returns it — nil when the turn was nobody's. A turn answers
-// for at most one errand: every provider queues typed input, so two messages
-// delivered to one session run as two turns, and a single done closing both
-// would report "answered elsewhere" about a request the target had not read
-// yet. The oldest delivery owns the turn; the rest wait for their own, their
-// busy marks reset so the next turn starts clean. Called under s.mu.
-func (s *Service) turnErrand(sessionID string) (string, *ticket) {
-	var oldestID string
-	var oldest *ticket
+// turnCandidates is every errand of a target's the turn that just ended could
+// have been, oldest delivery first. A turn answers for at most one errand:
+// every provider queues typed input, so two messages delivered to one session
+// run as two turns, and a single done closing both would report "answered
+// elsewhere" about a request the target had not read yet.
+//
+// One candidate is that turn's errand and nothing else's. Two are a turn
+// nothing here can attribute — the target's screen is the only place that says
+// which task it worked on, and reading it is the one thing this feature does
+// not do — so the caller closes neither and asks the worker to name the ticket
+// instead. Picking the oldest, which this used to do, closed a stranger's
+// errand on a guess and told its sender the work was over.
+//
+// A message delivered mid-turn is not a candidate for that turn's end: the turn
+// was already running, so its ending says nothing about the task pasted into
+// it. That is what skipTurns counts, and it is why the case a second task
+// arrives inside the first's turn is attributable rather than ambiguous.
+//
+// Called under s.mu. It consumes the skip counts and clears the busy marks, so
+// one turn ending is read exactly once and the next starts clean.
+func (s *Service) turnCandidates(sessionID string) []string {
+	var candidates []string
 	for id, t := range s.tickets {
 		if t.targetID != sessionID || t.delivered.IsZero() {
 			continue
@@ -155,16 +195,17 @@ func (s *Service) turnErrand(sessionID string) (string, *ticket) {
 		if !t.sawBusy {
 			continue
 		}
-		if oldest == nil || t.deliverySeq < oldest.deliverySeq {
-			oldestID, oldest = id, t
-		}
+		candidates = append(candidates, id)
 	}
 	for _, t := range s.tickets {
-		if t.targetID == sessionID && t != oldest {
+		if t.targetID == sessionID {
 			t.sawBusy = false
 		}
 	}
-	return oldestID, oldest
+	sort.Slice(candidates, func(i, j int) bool {
+		return s.tickets[candidates[i]].deliverySeq < s.tickets[candidates[j]].deliverySeq
+	})
+	return candidates
 }
 
 // announce raises or clears one session's mark. Called outside s.mu on every
