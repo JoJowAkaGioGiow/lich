@@ -52,6 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Windows installs with the bundled window now update lich and Chromium together through the installer and reopen automatically.
+
 - **A Kiro session now names its own card.** Kiro hands its hooks no transcript
   to read a title from, so a Kiro card kept the name lich gave it (`Session 3`)
   however long the conversation ran. lich now reads the title Kiro writes for
